@@ -1,13 +1,16 @@
 import os
-
+import time
 import torch
+
 from torch import nn
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from sklearn.metrics import precision_recall_fscore_support, classification_report
+# from torch.utils.tensorboard import SummaryWriter
+from torch.cuda.amp import autocast, GradScaler
 
-from src.nn.model import get_model
+from nn.model import get_model
 
 
 def evaluate_metrics(y_true, y_pred, class_names=None):
@@ -102,49 +105,45 @@ def train_cnn_model(
 
 def train_model(
         model,
-        train_loader: DataLoader,
-        valid_loader: DataLoader,
+        train_loader,
+        valid_loader,
         criterion,
         optimizer,
         device,
         num_epochs=10,
         save_path=None,
-        idx_to_class=None
+        idx_to_class=None,
+        scheduler=None,
+        clip_grad_norm=1.0,
+        use_amp=True,
+        log_dir="runs/experiment",
 ):
-    """
-    Обучает и валидирует модель, используя только mel_input из батчей данных.
-
-    Args:
-        model: Модель PyTorch (должна принимать только один тензор на входе).
-        train_loader: DataLoader для тренировочных данных.
-        valid_loader: DataLoader для валидационных данных.
-        criterion: Функция потерь.
-        optimizer: Оптимизатор.
-        device: Устройство для обучения ('cuda' или 'cpu').
-        num_epochs: Количество эпох обучения.
-        save_path: Путь для сохранения весов модели.
-    """
     model.to(device)
+    scaler = GradScaler(enabled=use_amp)
 
     for epoch in range(num_epochs):
+        start_time = time.time()
+
         model.train()
         train_loss = 0.0
         correct = 0
         total = 0
 
-        for train_data in tqdm(train_loader, desc=f"Epoch {epoch + 1}/{num_epochs} [Train]"):
-            mel_input, targets = train_data['mel'], train_data['label']
-
-            mel_input = mel_input.to(device)
-            targets = targets.to(device)
+        for batch in tqdm(train_loader, desc=f"Epoch {epoch + 1}/{num_epochs} [Train]"):
+            mel_input, targets = batch['mel'].to(device), batch['label'].to(device)
 
             optimizer.zero_grad()
 
-            outputs = model(mel_input)
+            with autocast(enabled=use_amp):
+                outputs = model(mel_input)
+                loss = criterion(outputs, targets)
 
-            loss = criterion(outputs, targets)
-            loss.backward()
-            optimizer.step()
+            scaler.scale(loss).backward()
+            if clip_grad_norm:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), clip_grad_norm)
+
+            scaler.step(optimizer)
+            scaler.update()
 
             train_loss += loss.item() * targets.size(0)
             _, predicted = outputs.max(1)
@@ -154,6 +153,7 @@ def train_model(
         avg_train_loss = train_loss / total
         train_acc = correct / total
 
+        # === Валидация ===
         model.eval()
         val_loss = 0.0
         correct = 0
@@ -162,15 +162,12 @@ def train_model(
         all_preds = []
 
         with torch.no_grad():
-            for valid_data in tqdm(valid_loader, desc=f"Epoch {epoch + 1}/{num_epochs} [Valid]"):
-                mel_input, targets = valid_data['mel'], valid_data['label']
+            for batch in tqdm(valid_loader, desc=f"Epoch {epoch + 1}/{num_epochs} [Valid]"):
+                mel_input, targets = batch['mel'].to(device), batch['label'].to(device)
 
-                mel_input = mel_input.to(device)
-                targets = targets.to(device)
-
-                outputs = model(mel_input)
-
-                loss = criterion(outputs, targets)
+                with autocast(enabled=use_amp):
+                    outputs = model(mel_input)
+                    loss = criterion(outputs, targets)
 
                 val_loss += loss.item() * targets.size(0)
                 _, predicted = outputs.max(1)
@@ -183,11 +180,17 @@ def train_model(
         avg_val_loss = val_loss / total
         val_acc = correct / total
 
+        epoch_time = time.time() - start_time
+
         print(f"\nEpoch {epoch + 1}: "
               f"Train Loss = {avg_train_loss:.4f}, Train Acc = {train_acc:.4f}, "
-              f"Val Loss = {avg_val_loss:.4f}, Val Acc = {val_acc:.4f}\n")
+              f"Val Loss = {avg_val_loss:.4f}, Val Acc = {val_acc:.4f}, "
+              f"Time = {epoch_time:.1f}s\n")
 
         evaluate_metrics(all_targets, all_preds, idx_to_class)
+
+        if scheduler:
+            scheduler.step()
 
         if save_path:
             os.makedirs(save_path, exist_ok=True)
@@ -197,7 +200,10 @@ def train_model(
 if __name__ == '__main__':
     from model import MultiBranchNet
     from dataset import create_dataloaders
-    from src.utils.preprocess import load_dataset_from_npz
+    from utils.preprocess import load_dataset_from_npz
+
+    from torch.optim import AdamW
+    from torch.optim.lr_scheduler import StepLR
 
     from matplotlib import pyplot as plt
 
@@ -224,29 +230,33 @@ if __name__ == '__main__':
     #     plt.tight_layout()
     #     plt.show()
 
-    device = 'cpu'
+    device = 'cuda:0'
 
     train_data, valid_data, test_data, class_to_idx, idx_to_class = load_dataset_from_npz(
-        r"D:\Projects\Python\drone-detection-c\dataset\baseline-arrays-no-noise")
+        r'/home/pavel/Projects/github/signal-detection/dataset/baseline-arrays')
 
-    print(test_data[0])
     class_labels = [item[-1] for item in train_data]
 
     from collections import Counter
     class_counts = Counter(class_labels)
 
+    num_classes = len(class_counts)
+    total_samples = sum(class_counts.values())
+
+    class_weights = [total_samples / class_counts[i] for i in range(num_classes)]
+    class_weights = torch.tensor(class_weights, dtype=torch.float32)
+
     print(class_counts)
 
-    train_loader, valid_loader, test_loader = create_dataloaders(train_data, valid_data, test_data, batch_size=16)
-    batch = next(iter(train_loader))
-    print(batch['mel'].shape, batch['mfcc'].shape, batch['contrast'].shape, batch['label'])
+    train_loader, valid_loader, test_loader = create_dataloaders(train_data, valid_data, test_data, batch_size=128)
 
-    # show_feature_map(batch['mel'], index=0, title="Mel Spectrogram After Interpolation")
 
-    model = get_model('mobilenetv2', 3)
-    #
-    criterion = nn.CrossEntropyLoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
+    model = get_model('efficientnetb0', 4)
+
+    optimizer = AdamW(model.parameters(), lr=1e-4, weight_decay=1e-5)
+    scheduler = StepLR(optimizer, step_size=5, gamma=0.5)
+    class_weights = class_weights.to(device)
+    criterion = torch.nn.CrossEntropyLoss(weight=class_weights)
 
     train_model(
         model,
@@ -255,7 +265,7 @@ if __name__ == '__main__':
         criterion,
         optimizer,
         device=device,
-        num_epochs=20,
+        num_epochs=10,
         save_path=r'D:\Projects\Python\drone-detection-c\checkpoints',
         idx_to_class=idx_to_class
     )

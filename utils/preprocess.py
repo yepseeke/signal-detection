@@ -4,7 +4,7 @@ import numpy as np
 
 from tqdm import tqdm
 
-from src.utils.features import (load_audio, extract_mel_spectrogram, extract_hpss_components, extract_mfcc,
+from utils.features import (load_audio, extract_mel_spectrogram, extract_hpss_components, extract_mfcc,
                                 extract_spectral_contrast, extract_zero_crossing_rate, extract_spectral_centroid,
                                 extract_spectral_bandwidth, extract_rms_energy)
 
@@ -213,8 +213,8 @@ def load_dataset_from_npz(root_dir):
 
 
 if __name__ == '__main__':
-    process_audios_into_arrays(r'D:\Projects\Python\drone-detection-c\dataset\baseline-audios',
-                               r'D:\Projects\Python\drone-detection-c\dataset\baseline-arrays', hop_duration=0)
+    process_audios_into_arrays(r'/home/pavel/Projects/github/signal-detection/dataset/baseline/',
+                               r'/home/pavel/Projects/github/signal-detection/dataset/baseline-arrays', hop_duration=0)
     # from src.utils.plot import plot_feature_matrix
 
     # matrix = \
