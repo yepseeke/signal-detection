@@ -1,4 +1,5 @@
 import librosa
+import time
 
 import numpy as np
 
@@ -22,7 +23,7 @@ def plot_spectrogram(spec, title="Spectrogram", ylabel="Frequency"):
     plt.figure(figsize=(10, 4))
     if isinstance(spec, Tensor):
         spec = spec.squeeze().cpu().numpy()
-    librosa.display.specshow(spec, sr=22050, x_axis='time', y_axis='mel')
+    librosa.display.specshow(spec, sr=129000, x_axis='time', y_axis='mel')
     plt.title(title)
     plt.ylabel(ylabel)
     plt.colorbar(format='%+2.0f dB')
@@ -106,44 +107,59 @@ def visualize_all_features_to_pdf(samples, sr, save_path="features_summary.pdf")
 
     with PdfPages(save_path) as pdf:
         for name, signal in modes.items():
+            print(f"\nProcessing: {name}")
             signal_tensor = torch.tensor(signal).unsqueeze(0)
 
+            start = time.time()
             mel = extract_mel_spectrogram(signal_tensor, sr)
+            print(f"[{name}] Mel spectrogram: {time.time() - start:.3f} sec")
             plot_spectrogram(mel, title=f"{name} - Mel Spectrogram")
             pdf.savefig()
             plt.close()
 
-            mfcc = extract_mfcc(signal_tensor, sr)
-            plot_mfcc(mfcc, title=f"{name} - MFCC")
-            pdf.savefig()
-            plt.close()
+            # start = time.time()
+            # mfcc = extract_mfcc(signal_tensor, sr)
+            # print(f"[{name}] MFCC: {time.time() - start:.3f} sec")
+            # plot_mfcc(mfcc, title=f"{name} - MFCC")
+            # pdf.savefig(); plt.close()
 
+            start = time.time()
             zcr = extract_zero_crossing_rate(signal)
+            print(f"[{name}] ZCR: {time.time() - start:.3f} sec")
             plot_scalar_feature(zcr, title=f"{name} - Zero-Crossing Rate", ylabel="ZCR")
             pdf.savefig()
             plt.close()
 
-            centroid = extract_spectral_centroid(signal, sr)
+            start = time.time()
+            centroid = extract_spectral_centroid(signal, sr) / (sr // 2)
+            print(f"[{name}] Spectral Centroid: {time.time() - start:.3f} sec")
             plot_scalar_feature(centroid, title=f"{name} - Spectral Centroid", ylabel="Hz")
             pdf.savefig()
             plt.close()
 
-            bandwidth = extract_spectral_bandwidth(signal, sr)
+            start = time.time()
+            bandwidth = extract_spectral_bandwidth(signal, sr) / (sr // 2)
+            print(f"[{name}] Spectral Bandwidth: {time.time() - start:.3f} sec")
             plot_scalar_feature(bandwidth, title=f"{name} - Spectral Bandwidth", ylabel="Hz")
             pdf.savefig()
             plt.close()
 
+            start = time.time()
             rms = extract_rms_energy(signal)
+            print(f"[{name}] RMS Energy: {time.time() - start:.3f} sec")
             plot_scalar_feature(rms, title=f"{name} - RMS Energy", ylabel="Amplitude")
             pdf.savefig()
             plt.close()
 
-            contrast = extract_spectral_contrast(signal, sr, return_type='numpy')
-            plot_spectral_contrast(contrast, sr, title=f"{name} - Spectral Contrast")
-            pdf.savefig()
-            plt.close()
+            # start = time.time()
+            # contrast = extract_spectral_contrast(signal, sr, return_type='numpy')
+            # print(f"[{name}] Spectral Contrast: {time.time() - start:.3f} sec")
+            # plot_spectral_contrast(contrast, sr, title=f"{name} - Spectral Contrast")
+            # pdf.savefig(); plt.close()
 
+            start = time.time()
             temporal_feats = extract_temporal_features(signal)
+            print(f"[{name}] Temporal features: {time.time() - start:.3f} sec")
             print_temporal_features_to_plot(temporal_feats, title=f"{name} - Temporal Stats")
             pdf.savefig()
             plt.close()
@@ -169,10 +185,11 @@ def plot_feature_matrix(matrix, title="Feature Matrix", xlabel="Time Frames", yl
 if __name__ == "__main__":
     import torch
 
-    from src.utils.features import (load_audio, extract_mel_spectrogram, extract_mfcc, extract_chroma,
+    from utils.features import (load_audio, extract_mel_spectrogram, extract_mfcc, extract_chroma,
                                     extract_zero_crossing_rate, extract_spectral_centroid, extract_spectral_bandwidth,
                                     extract_rms_energy,
-                                    extract_spectral_contrast, extract_temporal_features, extract_hpss_components)
+                                    extract_spectral_contrast, extract_temporal_features, extract_hpss_components,
+                                extract_sequence_features_per_mode, scale_features_per_mode)
 
     import os
 
@@ -181,16 +198,30 @@ if __name__ == "__main__":
     sample_rate = 16000
     time_step = 0.2
 
-    samples, sr = load_audio(r"drone-forward-backward.wav",
+    samples, sr = load_audio(r"D:\Projects\Python\drone-detection-c\dataset\clean-baseline-audios\train\small_copter\2024-05-22 13-55-55_converted4.wav",
                              sample_rate=sample_rate, return_tensor=False)
-    samples = samples[int(time_step * sample_rate):2 * int(time_step * sample_rate)]
-    # plot_waveform(samples, sr)
-    # plt.show()
-    #
-    # mel = extract_mel_spectrogram(torch.tensor(samples).unsqueeze(0), sr)
-    # print(mel.shape)
-    # plot_spectrogram(mel, title="Mel Spectrogram")
-    # plt.show()
+    samples = samples[60 * int(time_step * sample_rate):61 * int(time_step * sample_rate)]
+    features = extract_sequence_features_per_mode(
+        samples,
+        sample_rate,
+        frame_length=512,
+        hop_length=64,
+        n_fft=1024
+    )
+    plot_waveform(samples, sr)
+    plt.show()
+    print(features['percussive'].shape)
+    scaled = scale_features_per_mode(features, method='minmax')
+
+    plt.plot(features['original'])
+    plt.show()
+    plt.plot(scaled['original'])
+    plt.show()
+    visualize_all_features_to_pdf(samples, sr)
+
+    mel = extract_mel_spectrogram(torch.tensor(samples).unsqueeze(0), sr)
+    plot_spectrogram(mel, title="Mel Spectrogram")
+    plt.show()
     #
     # mfcc = extract_mfcc(torch.tensor(samples).unsqueeze(0), sr)
     # print(mfcc.shape)
@@ -217,10 +248,10 @@ if __name__ == "__main__":
     print(rms.shape)
     plt.show()
 
-    # contrast = extract_spectral_contrast(samples, sr, return_type='numpy', expand_dims=False)
-    # print(contrast.shape)
-    # plot_spectral_contrast(contrast, sr)
-    # plt.show()
+    contrast = extract_spectral_contrast(samples, sr, return_type='numpy', expand_dims=False)
+    print(contrast.shape)
+    plot_spectral_contrast(contrast, sr)
+    plt.show()
 
     temporal_feats = extract_temporal_features(samples)
     print_temporal_features(temporal_feats)

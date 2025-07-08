@@ -1,19 +1,6 @@
 import torch
 
-import torch.nn.functional as F
-
 from torch.utils.data import Dataset, DataLoader
-
-
-# class ResizeFeatures:
-#     def __init__(self, size=(64, 128)):
-#         self.size = size
-#
-#     def __call__(self, mel, mfcc, contrast):
-#         mel = F.interpolate(mel.unsqueeze(0), size=self.size, mode='bilinear', align_corners=False).squeeze(0)
-#         mfcc = F.interpolate(mfcc.unsqueeze(0), size=self.size, mode='bilinear', align_corners=False).squeeze(0)
-#         contrast = F.interpolate(contrast.unsqueeze(0), size=self.size, mode='bilinear', align_corners=False).squeeze(0)
-#         return mel, mfcc, contrast
 
 
 class AudioFeatureDataset(Dataset):

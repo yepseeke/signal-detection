@@ -5,25 +5,7 @@ import torch.nn as nn
 import torchvision.models as models
 import torch.nn.functional as F
 
-
-class SimpleCNN(nn.Module):
-    def __init__(self, out_dim=1024):
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.Conv2d(1, 32, kernel_size=3, stride=1, padding=1),  # [B, 32, 7, 51]
-            nn.ReLU(),
-            nn.MaxPool2d(kernel_size=2),  # [B, 32, 3, 25]
-
-            nn.Conv2d(32, 64, kernel_size=3, padding=1),  # [B, 64, 3, 25]
-            nn.ReLU(),
-            nn.AdaptiveAvgPool2d((1, 1)),  # [B, 64, 1, 1]
-        )
-        self.fc = nn.Linear(64, out_dim)
-
-    def forward(self, x):
-        x = self.net(x)
-        x = x.view(x.size(0), -1)  # Flatten
-        return self.fc(x)
+from cnn import SimpleCNN
 
 
 class MultiBranchNet(nn.Module):
@@ -77,23 +59,16 @@ def get_model(model_name: str, num_classes: int):
     elif model_name == 'vgg11':
         model = models.vgg11(weights=None)
         model.features[0] = nn.Conv2d(1, 64, kernel_size=3, padding=1)
-
-        dummy_input_vgg = torch.randn(1, 1, 64, 51)
-        output_features = model.features(dummy_input_vgg)
-
-        in_features_vgg = output_features.view(output_features.size(0), -1).shape[1]
-
-        model.classifier = nn.Sequential(
-            nn.Linear(in_features_vgg, 4096),
-            nn.ReLU(True),
-            nn.Dropout(),
-            nn.Linear(4096, 4096),
-            nn.ReLU(True),
-            nn.Dropout(),
-            nn.Linear(4096, num_classes)
-        )
+        model.classifier[6] = nn.Linear(in_features=model.classifier[6].in_features, out_features=num_classes)
 
         return model
+
+    elif model_name == 'resnet18':
+        model = models.resnet18(weights=None)
+        model.conv1 = nn.Conv2d(1, 64, kernel_size=3, stride=1, padding=2, bias=False)
+        model.fc = nn.Linear(model.fc.in_features, num_classes)
+        return model
+
 
     elif model_name == 'resnet34':
         model = models.resnet34(weights=None)
@@ -101,9 +76,15 @@ def get_model(model_name: str, num_classes: int):
         model.fc = nn.Linear(model.fc.in_features, num_classes)
         return model
 
+    elif model_name == 'resnet50':
+        model = models.resnet50(weights=None)
+        model.conv1 = nn.Conv2d(1, 64, kernel_size=3, stride=1, padding=2, bias=False)
+        model.fc = nn.Linear(model.fc.in_features, num_classes)
+        return model
+
     elif model_name == 'densenet121':
         model = models.densenet121(weights=None)
-        model.features.conv0 = nn.Conv2d(1, 64, kernel_size=3, stride=1, padding=2, bias=False)
+        model.features.conv0 = nn.Conv2d(1, 64, kernel_size=3, stride=1, padding=1, bias=False)
         model.classifier = nn.Linear(model.classifier.in_features, num_classes)
         return model
 
@@ -121,3 +102,16 @@ def get_model(model_name: str, num_classes: int):
 
     else:
         raise ValueError(f"Unknown model name: {model_name}")
+
+
+if __name__ == '__main__':
+    for model_name in ["baseline", 'resnet18', 'resnet34', 'resnet50',
+                       'vgg11', 'densenet121', 'mobilenetv2', 'efficientnetb0']:
+        model = get_model(model_name, 4)
+
+        total_params = sum(p.numel() for p in model.parameters())
+        trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        print(f"Модель: {model_name}")
+        print(f"Общее количество параметров: {total_params:,}")
+        print(f"Обучаемых параметров: {trainable_params:,}")
+        print(f"Размер модели: {total_params * 4 / (1024 ** 2):.2f} МБ (float32)")
